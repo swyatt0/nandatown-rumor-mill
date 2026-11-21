@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+anthropic = ["anthropic>=2"]
 
 [project.scripts]
 nandatown = "nandatown.cli:main"

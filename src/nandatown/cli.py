@@ -9,6 +9,7 @@ coordinator for bringing your own agent.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import __version__
@@ -60,6 +61,22 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"--layer {spec!r} must look like layer=plugin.id")
             return 2
         layer_overrides[layer] = plugin_id
+    if name == "market-llm":
+        from .market import run_market
+        from .runner import RunnerError
+        comms = os.environ.get("TOWN_COMMS", "dm")
+        print(f"nandatown {__version__}: market-llm run, TOWN_COMMS={comms}")
+        try:
+            bundle_dir, record = run_market(name, args.out,
+                                            model=args.model, comms=comms)
+        except RunnerError as exc:
+            print(exc)
+            return 2
+        print(f"total tokens: {record['total_tokens']}"
+              f" (429 retries: {record['rate_limits']},"
+              f" {record['duration_seconds']} s)")
+        print(f"Evidence bundle: {bundle_dir}")
+        return 0
     if name in PROFILES:
         if args.plugin or layer_overrides:
             print("--plugin and --layer apply to Lab scenarios; Track"

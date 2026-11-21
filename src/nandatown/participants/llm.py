@@ -73,6 +73,38 @@ TOOLS = [
             "required": ["exit_code"]}}},
 ]
 
+# Market profiles add two conversation tools on top of the five above.
+# TOWN_COMMS=dm: `to` names one participant. TOWN_COMMS=room: `to` may
+# also be "everyone". Nothing else differs between the modes.
+COMMS_TOOLS = [
+    {"type": "function", "function": {
+        "name": "say",
+        "description": "Send a text message. `to` is one participant"
+                       " name{everyone}.",
+        "parameters": {"type": "object", "properties": {
+            "to": {"type": "string"},
+            "text": {"type": "string"}},
+            "required": ["to", "text"]}}},
+    {"type": "function", "function": {
+        "name": "read_messages",
+        "description": "Return messages sent to you that you have not"
+                       " seen yet (waits a few seconds if none).",
+        "parameters": {"type": "object", "properties": {}}}},
+]
+
+
+def comms_tools(mode: str) -> list[dict[str, Any]]:
+    everyone = (', or "everyone" to send to all other participants'
+                if mode == "room" else "")
+    tools = json.loads(json.dumps(COMMS_TOOLS))
+    tools[0]["function"]["description"] = (
+        tools[0]["function"]["description"].format(everyone=everyone))
+    return tools
+
+
+class RateLimited(Exception):
+    pass
+
 
 class MockBrain:
     """A deterministic brain that speaks only through tool calls.
@@ -208,15 +240,87 @@ class MockBrain:
         return self._call("claim_work", {})
 
 
+class AnthropicChat:
+    """Native Claude Messages API behind the same chat() shape.
+
+    The participant keeps its history in OpenAI form; this converts on
+    every call. Claude's assistant turns are replayed verbatim from the
+    raw content blocks (thinking blocks included), so the history stays
+    append-only as the Messages API requires.
+    """
+
+    MAX_TOKENS = 16000
+
+    def __init__(self, model: str, api_key: str | None):
+        import anthropic
+
+        self._anthropic = anthropic
+        # Retries are ours (counted, bounded), not the SDK's.
+        self.client = anthropic.Anthropic(api_key=api_key, max_retries=0)
+        self.model = model
+
+    @staticmethod
+    def _tools(tools):
+        return [{"name": t["function"]["name"],
+                 "description": t["function"]["description"],
+                 "input_schema": t["function"]["parameters"]}
+                for t in tools]
+
+    @staticmethod
+    def _messages(messages):
+        system = ""
+        out: list[dict[str, Any]] = []
+        for m in messages:
+            if m["role"] == "system":
+                system = m["content"]
+            elif m["role"] == "assistant":
+                out.append({"role": "assistant", "content": m["_raw"]})
+            elif m["role"] == "tool":
+                block = {"type": "tool_result",
+                         "tool_use_id": m["tool_call_id"],
+                         "content": m["content"]}
+                if (out and out[-1]["role"] == "user"
+                        and isinstance(out[-1]["content"], list)):
+                    out[-1]["content"].append(block)
+                else:
+                    out.append({"role": "user", "content": [block]})
+            else:
+                out.append({"role": "user", "content": m["content"]})
+        return system, out
+
+    def create(self, messages, tools):
+        """Returns (reply, usage) or raises RateLimitError."""
+        system, msgs = self._messages(messages)
+        resp = self.client.messages.create(
+            model=self.model, max_tokens=self.MAX_TOKENS, system=system,
+            messages=msgs, tools=self._tools(tools),
+            output_config={"effort": "medium"})
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        calls = [{"id": b.id, "type": "function",
+                  "function": {"name": b.name,
+                               "arguments": json.dumps(b.input)}}
+                 for b in resp.content if b.type == "tool_use"]
+        return ({"content": text or None, "tool_calls": calls,
+                 "_raw": resp.content},
+                (resp.usage.input_tokens, resp.usage.output_tokens))
+
+
 class ModelClient:
-    """OpenAI-compatible chat completions, or the mock brain."""
+    """OpenAI-compatible chat completions, native Claude for claude-*
+    models, or the mock brain."""
 
     def __init__(self, model: str, role: str,
                  base_url: str | None = None, api_key: str | None = None,
                  http: httpx.Client | None = None):
         self.model = model
         self.mock = MockBrain(role) if model.startswith("mock:") else None
-        if self.mock is None:
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.rate_limits = 0
+        self.claude = (AnthropicChat(model, api_key
+                                     or os.environ.get("TOWN_MODEL_KEY"))
+                       if model.startswith("claude-") else None)
+        if self.mock is None and self.claude is None:
             self.base_url = (base_url
                              or os.environ.get("TOWN_MODEL_URL")
                              or "http://localhost:11434/v1")
@@ -230,19 +334,65 @@ class ModelClient:
     def chat(self, messages, tools) -> dict[str, Any]:
         if self.mock is not None:
             return self.mock.chat(messages, tools)
-        r = self.http.post("/chat/completions",
-                           json={"model": self.model, "messages": messages,
-                                 "tools": tools, "tool_choice": "auto"})
+        if self.claude is not None:
+            return self._chat_claude(messages, tools)
+        wire = [{k: v for k, v in m.items() if k != "_raw"}
+                for m in messages]
+        # 429: wait and retry with backoff; give up after a few in a row.
+        for attempt in range(6):
+            r = self.http.post("/chat/completions",
+                               json={"model": self.model,
+                                     "messages": wire,
+                                     "tools": tools, "tool_choice": "auto"})
+            if r.status_code != 429:
+                break
+            self.rate_limits += 1
+            time.sleep(min(60.0, 5.0 * 2 ** attempt))
+        else:
+            raise RateLimited("model endpoint kept returning 429")
         r.raise_for_status()
-        message = r.json()["choices"][0]["message"]
+        data = r.json()
+        usage = data.get("usage") or {}
+        self.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+        self.completion_tokens += int(usage.get("completion_tokens") or 0)
+        message = data["choices"][0]["message"]
         return {"content": message.get("content"),
                 "tool_calls": message.get("tool_calls") or []}
+
+    def _chat_claude(self, messages, tools) -> dict[str, Any]:
+        rate_limit = self.claude._anthropic.RateLimitError
+        for attempt in range(6):
+            try:
+                reply, (inp, out) = self.claude.create(messages, tools)
+            except rate_limit as exc:
+                self.rate_limits += 1
+                wait = exc.response.headers.get("retry-after")
+                try:
+                    delay = float(wait) if wait else 5.0 * 2 ** attempt
+                except ValueError:
+                    delay = 5.0 * 2 ** attempt
+                time.sleep(min(60.0, delay))
+                continue
+            self.prompt_tokens += inp
+            self.completion_tokens += out
+            return reply
+        raise RateLimited("model endpoint kept returning 429")
 
 
 class LLMParticipant:
     def __init__(self, client: TownClient, name: str, role: str,
-                 state_dir: str, model: str, fault: str = "none"):
+                 state_dir: str, model: str, fault: str = "none",
+                 skill: str | None = None, comms: str | None = None):
         self.client = client
+        self.state_dir = state_dir
+        # A market participant reads its own role skill and talks with
+        # say/read_messages; the quote profiles leave both unset.
+        self.skill = skill
+        self.comms = comms
+        self.tools = TOOLS + (comms_tools(comms) if comms else [])
+        self._say_seq = 0
+        self._seen: set[str] = set()
+        self.finish_note: str | None = None
         self.name = name
         self.role = role
         self.model = ModelClient(model, role)
@@ -257,6 +407,20 @@ class LLMParticipant:
         self.messages: list[dict[str, Any]] = []
 
     def _system_prompt(self, token_note: str) -> str:
+        if self.skill:
+            others = ", ".join(sorted(
+                n for n in self.client.run_context.get("roles", {})
+                if n != self.name))
+            how = ('say(to="everyone", ...) reaches all participants;'
+                   ' say(to=<name>, ...) reaches one.'
+                   if self.comms == "room" else
+                   "say(to=<name>, ...) reaches exactly one participant.")
+            return (
+                f"You are {self.name} in a NANDA Town widget market."
+                f" Other participants: {others}. Talk with say and"
+                f" read_messages. {how} Use only your tools; everything"
+                f" you say goes into the run's evidence. When your part is"
+                f" done, call finish.\n\n" + skill_source(self.skill))
         role_skill = ("quote.read" if self.role == "seller"
                       else "quote.request")
         task = self.client.run_context.get("task", {})
@@ -321,7 +485,59 @@ class LLMParticipant:
 
     def _tool_finish(self, args: dict[str, Any]) -> str:
         self.exit_code = int(args["exit_code"])
+        self.finish_note = args.get("note")
         return "finished"
+
+    def _names(self) -> set[str]:
+        return {p["name"] for p in self.client.participants()}
+
+    def _tool_say(self, args: dict[str, Any]) -> str:
+        if not self.comms:
+            return "error: unknown tool say"
+        to = str(args.get("to", "")).strip()
+        text = str(args.get("text", ""))
+        names = self._names() - {self.name}
+        if to == "everyone" and self.comms == "room":
+            recipients = sorted(names)
+        elif to in names:
+            recipients = [to]
+        else:
+            allowed = sorted(names) + (["everyone"]
+                                       if self.comms == "room" else [])
+            return f"error: `to` must be one of {allowed}"
+        self._say_seq += 1
+        say_id = f"say-{self.name}-{self._say_seq}"
+        for r in recipients:
+            self.client.send(f"{say_id}-{r}", r, "say",
+                             {"say_id": say_id, "to": to, "text": text})
+        return json.dumps({"sent": True, "to": to,
+                           "recipients": recipients})
+
+    def _tool_read_messages(self, args: dict[str, Any]) -> str:
+        if not self.comms:
+            return "error: unknown tool read_messages"
+        out: list[dict[str, Any]] = []
+        for attempt in range(2):
+            while True:
+                claim = self.client.claim()
+                if claim is None:
+                    break
+                try:
+                    self.client.ack(claim["message_id"], claim["fence"],
+                                    "processed", {"read": True})
+                except StaleFenceError:
+                    pass
+                if claim["message_id"] in self._seen:
+                    continue
+                self._seen.add(claim["message_id"])
+                body = claim.get("body") or {}
+                out.append({"from": claim.get("from"),
+                            "to": body.get("to", self.name),
+                            "text": body.get("text", json.dumps(body))})
+            if out or attempt:
+                break
+            self.client.notify(wait=4.0)
+        return json.dumps(out) if out else "no new messages"
 
     def _execute(self, name: str, args: dict[str, Any]) -> str:
         handler = getattr(self, f"_tool_{name}", None)
@@ -361,11 +577,14 @@ class LLMParticipant:
             if time.time() > deadline:
                 return 6
             self._maybe_truncate()
-            reply = self.model.chat(self.messages, TOOLS)
+            reply = self.model.chat(self.messages, self.tools)
             calls = reply.get("tool_calls") or []
-            self.messages.append({"role": "assistant",
-                                  "content": reply.get("content"),
-                                  "tool_calls": calls})
+            assistant = {"role": "assistant",
+                         "content": reply.get("content"),
+                         "tool_calls": calls}
+            if "_raw" in reply:
+                assistant["_raw"] = reply["_raw"]
+            self.messages.append(assistant)
             if not calls:
                 self.messages.append(
                     {"role": "user",
@@ -386,6 +605,23 @@ class LLMParticipant:
         return 8
 
 
+def _write_stats(participant: LLMParticipant, code: int,
+                 error: str | None) -> None:
+    """Token usage and the finish note, for the market runner to collect.
+    Never includes the model key."""
+    m = participant.model
+    stats = {"name": participant.name, "role": participant.role,
+             "exit_code": code, "finish_note": participant.finish_note,
+             "prompt_tokens": getattr(m, "prompt_tokens", 0),
+             "completion_tokens": getattr(m, "completion_tokens", 0),
+             "rate_limits": getattr(m, "rate_limits", 0),
+             "error": error}
+    stats["total_tokens"] = (stats["prompt_tokens"]
+                             + stats["completion_tokens"])
+    with open(os.path.join(participant.state_dir, "stats.json"), "w") as f:
+        json.dump(stats, f)
+
+
 def main() -> None:
     env = os.environ
     client = TownClient(env["TOWN_URL"], env["RUN_ID"])
@@ -394,9 +630,36 @@ def main() -> None:
         client, env["NAME"], env["ROLE"], env["STATE_DIR"],
         model=env.get("TOWN_MODEL", "mock:v1"),
         fault=env.get("FAULT", "none"),
+        skill=env.get("SKILL") or None,
+        comms=env.get("TOWN_COMMS") or None,
     )
-    sys.exit(participant.run(
-        deadline_seconds=float(env.get("DEADLINE", "60"))))
+    if participant.skill:
+        import signal
+
+        def _stopped(signum, frame):
+            raise SystemExit(-signum)
+
+        # The runner stops agents still running when the buyers are done;
+        # leave through the finally below so their token usage is kept.
+        signal.signal(signal.SIGTERM, _stopped)
+    if not participant.skill:
+        sys.exit(participant.run(
+            deadline_seconds=float(env.get("DEADLINE", "60"))))
+    code, error = 9, None
+    try:
+        code = participant.run(
+            deadline_seconds=float(env.get("DEADLINE", "60")))
+    except SystemExit as exc:
+        code, error = int(exc.code or 0), "stopped by runner"
+    except Exception as exc:  # recorded key-free: type and status only
+        error = type(exc).__name__
+        status = getattr(getattr(exc, "response", None), "status_code",
+                         None)
+        if status is not None:
+            error += f" {status}"
+    finally:
+        _write_stats(participant, code, error)
+    sys.exit(code)
 
 
 if __name__ == "__main__":

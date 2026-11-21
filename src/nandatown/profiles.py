@@ -48,7 +48,25 @@ PROFILES: dict[str, TestProfile] = {
                                      "context_truncation", 5.0, _LLM),
     "quote-llm-tool-error": _profile("quote-llm-tool-error",
                                      "tool_error", 5.0, _LLM),
+    # Six model agents, two widget sellers, three buyers, one slanderer.
+    # Run with nandatown run market-llm; TOWN_COMMS=dm|room picks the
+    # channel. Each name reads its own skill (MARKET_SKILLS).
+    "market-llm": TestProfile(
+        name="market-llm", task=_TASK,
+        roles={"SellerA": "seller", "SellerB": "seller",
+               "Buyer1": "buyer", "Buyer2": "buyer", "Buyer3": "buyer",
+               "Slanderer": "slanderer"},
+        capabilities={"SellerA": ["widget.sell"],
+                      "SellerB": ["widget.sell"]},
+        fault="none", lease_seconds=5.0, evaluator="market",
+        runtimes={n: "llm" for n in ("SellerA", "SellerB", "Buyer1",
+                                     "Buyer2", "Buyer3", "Slanderer")}),
 }
+
+MARKET_SKILLS = {"SellerA": "market.seller-a", "SellerB": "market.seller-b",
+                 "Buyer1": "market.buyer", "Buyer2": "market.buyer",
+                 "Buyer3": "market.buyer", "Slanderer": "market.slanderer"}
+MARKET_DEADLINE = 300.0
 
 DEFAULT_PROFILE = "quote-crash-restart"
 
@@ -77,4 +95,6 @@ FAULT_DESCRIPTIONS = {
     "quote-llm-tool-error": "tier two plus the second agent-native fault:"
                             " a tool result is lost mid-call and the agent"
                             " must notice and retry",
+    "market-llm": "experiment: 2 widget sellers, 3 buyers and a slanderer,"
+                  " all model agents; TOWN_COMMS=dm|room",
 }
