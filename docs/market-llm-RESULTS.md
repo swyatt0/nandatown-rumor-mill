@@ -1,3 +1,5 @@
+Superseded: the scripted participant's name 'Slanderer' was visible to buyers; see [market-llm-RESULTS-disguised.md](market-llm-RESULTS-disguised.md).
+
 # market-llm: can one rumor move an AI marketplace?
 
 Six participants trade widgets on NANDA Town. SellerA (20.00/unit) and
