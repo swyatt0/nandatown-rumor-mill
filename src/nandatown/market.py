@@ -3,7 +3,7 @@
 run_town is built around one buyer and one seller, so the market gets its
 own small loop: start the coordinator, spawn every participant with its
 own skill, wait for the buyers, collect events, intents and per-agent
-stats into out_dir/<run_id>/. TOWN_COMMS (dm|room) is the only switch.
+stats into out_dir/<run_id>/. TOWN_COMMS (dm|room|leak) is the only switch.
 
 TOWN_MODEL_KEY is passed to participant processes through the
 environment and is never written, logged or printed here; the saved
@@ -27,7 +27,7 @@ from .profiles import MARKET_DEADLINE, MARKET_SKILLS, PROFILES
 from .runner import (_BUILTIN_ENV_KEYS, RunnerError, _free_port,
                      _participant_extra_env, _stop_process, _wait_health)
 
-COMMS_MODES = ("dm", "room")
+COMMS_MODES = ("dm", "room", "leak")
 # After the last buyer finishes, sellers and the slanderer get this long
 # to wrap up before they are stopped.
 GRACE_SECONDS = 20.0

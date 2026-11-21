@@ -49,7 +49,7 @@ PROFILES: dict[str, TestProfile] = {
     "quote-llm-tool-error": _profile("quote-llm-tool-error",
                                      "tool_error", 5.0, _LLM),
     # Six model agents, two widget sellers, three buyers, one slanderer.
-    # Run with nandatown run market-llm; TOWN_COMMS=dm|room picks the
+    # Run with nandatown run market-llm; TOWN_COMMS=dm|room|leak picks the
     # channel. Each name reads its own skill (MARKET_SKILLS).
     "market-llm": TestProfile(
         name="market-llm", task=_TASK,
@@ -96,5 +96,5 @@ FAULT_DESCRIPTIONS = {
                             " a tool result is lost mid-call and the agent"
                             " must notice and retry",
     "market-llm": "experiment: 2 widget sellers, 3 buyers and a slanderer,"
-                  " all model agents; TOWN_COMMS=dm|room",
+                  " all model agents; TOWN_COMMS=dm|room|leak",
 }

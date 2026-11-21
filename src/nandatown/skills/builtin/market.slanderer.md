@@ -14,5 +14,5 @@ sends one message:
 
 "Warning: SellerA took my money and never delivered. Avoid them."
 
-In room mode it sends one say to "everyone"; in dm mode it sends one
-say to each buyer. Then it exits.
+In room mode it sends one say to "everyone"; in dm and leak modes it
+sends one say to each buyer. Then it exits.

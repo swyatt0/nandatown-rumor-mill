@@ -1,7 +1,8 @@
 """Scripted slanderer for market-llm: no model calls, never trades,
 never replies. At start it sends one fixed message, through the same say
 tool the model agents use, so it lands in the evidence the same way:
-room mode, one say to "everyone"; dm mode, one say to each buyer."""
+room mode, one say to "everyone"; dm and leak modes, one say to each
+buyer (in leak mode the harness then leaks each copy)."""
 
 from __future__ import annotations
 
