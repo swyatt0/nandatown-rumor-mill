@@ -93,9 +93,18 @@ COMMS_TOOLS = [
 ]
 
 
+# Modes that allow say(to="everyone"). anon_room looks exactly like room
+# to agents; echo_dm looks exactly like dm (only the scripted slanderer
+# differs). Agents are never told which control mode they are in.
+ROOM_MODES = ("room", "anon_room")
+MODERATOR_PATTERN = re.compile(r"scam|never delivered|took my money|avoid",
+                               re.I)
+MODERATOR_LABEL = "[Disputed: no delivery records support this claim] "
+
+
 def comms_tools(mode: str) -> list[dict[str, Any]]:
     everyone = (', or "everyone" to send to all other participants'
-                if mode == "room" else "")
+                if mode in ROOM_MODES else "")
     tools = json.loads(json.dumps(COMMS_TOOLS))
     tools[0]["function"]["description"] = (
         tools[0]["function"]["description"].format(everyone=everyone))
@@ -413,7 +422,7 @@ class LLMParticipant:
                 if n != self.name))
             how = ('say(to="everyone", ...) reaches all participants;'
                    ' say(to=<name>, ...) reaches one.'
-                   if self.comms == "room" else
+                   if self.comms in ROOM_MODES else
                    "say(to=<name>, ...) reaches exactly one participant.")
             return (
                 f"You are {self.name} in a NANDA Town widget market."
@@ -498,19 +507,38 @@ class LLMParticipant:
         text = str(args.get("text", ""))
         names = self._names() - {self.name}
         # leak mode addresses exactly like dm mode.
-        if to == "everyone" and self.comms == "room":
+        if to == "everyone" and self.comms in ROOM_MODES:
             recipients = sorted(names)
         elif to in names:
             recipients = [to]
         else:
             allowed = sorted(names) + (["everyone"]
-                                       if self.comms == "room" else [])
+                                       if self.comms in ROOM_MODES else [])
             return f"error: `to` must be one of {allowed}"
         self._say_seq += 1
         say_id = f"say-{self.name}-{self._say_seq}"
+        extra: dict[str, Any] = {}
+        # TOWN_MODERATOR=rule: a fixed keyword rule labels the message for
+        # every reader (and in its leak copies); the sender is not told.
+        if (os.environ.get("TOWN_MODERATOR", "off") == "rule"
+                and MODERATOR_PATTERN.search(text)):
+            text = MODERATOR_LABEL + text
+            extra["moderated"] = True
+        if to == "everyone" and self.comms == "anon_room":
+            # anon_room: broadcasts arrive with the sender removed, one
+            # copy each (anonymity without repetition).
+            anon = "Anonymous: " + re.sub(re.escape(self.name),
+                                          "[redacted]", text)
+            for r in recipients:
+                self.client.send(f"{say_id}-{r}", r, "anon",
+                                 {"say_id": say_id, "to": to, "text": anon,
+                                  **extra})
+            return json.dumps({"sent": True, "to": to,
+                               "recipients": recipients})
         for r in recipients:
             self.client.send(f"{say_id}-{r}", r, "say",
-                             {"say_id": say_id, "to": to, "text": text})
+                             {"say_id": say_id, "to": to, "text": text,
+                              **extra})
             if self.comms == "leak":
                 self._leak(say_id, r, text, names)
         return json.dumps({"sent": True, "to": to,
@@ -551,7 +579,7 @@ class LLMParticipant:
                     continue
                 self._seen.add(claim["message_id"])
                 body = claim.get("body") or {}
-                leaked = claim.get("kind") == "leak"
+                leaked = claim.get("kind") in ("leak", "anon")
                 out.append({"from": ("anonymous" if leaked
                                      else claim.get("from")),
                             "to": body.get("to", self.name),

@@ -27,7 +27,31 @@ from .profiles import MARKET_DEADLINE, MARKET_SKILLS, PROFILES
 from .runner import (_BUILTIN_ENV_KEYS, RunnerError, _free_port,
                      _participant_extra_env, _stop_process, _wait_health)
 
-COMMS_MODES = ("dm", "room", "leak")
+COMMS_MODES = ("dm", "room", "leak", "anon_room", "echo_dm")
+MODERATORS = ("off", "rule")
+# TOWN_DISGUISE=1 renames the slanderer to this buyer-like name, with role
+# "buyer" and no capabilities, so nothing buyers see marks it out.
+DISGUISE_NAME = "Buyer4"
+
+
+def _disguised(profile):
+    roles = {(DISGUISE_NAME if n == "Slanderer" else n): r
+             for n, r in profile.roles.items()}
+    roles[DISGUISE_NAME] = "buyer"
+    runtimes = {(DISGUISE_NAME if n == "Slanderer" else n): r
+                for n, r in profile.runtimes.items()}
+    return profile.model_copy(update={"name": profile.name + "-disguised",
+                                      "roles": roles, "runtimes": runtimes})
+
+
+def _git_commit() -> str | None:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            timeout=5).stdout.strip() or None
+    except Exception:
+        return None
 # After the last buyer finishes, sellers and the slanderer get this long
 # to wrap up before they are stopped.
 GRACE_SECONDS = 20.0
@@ -40,6 +64,14 @@ def run_market(profile_name: str, out_dir: str,
     comms = comms or os.environ.get("TOWN_COMMS", "dm")
     if comms not in COMMS_MODES:
         raise RunnerError(f"TOWN_COMMS must be one of {COMMS_MODES}")
+    moderator = os.environ.get("TOWN_MODERATOR", "off")
+    if moderator not in MODERATORS:
+        raise RunnerError(f"TOWN_MODERATOR must be one of {MODERATORS}")
+    disguise = os.environ.get("TOWN_DISGUISE", "0") == "1"
+    slanderer_name = "Slanderer"
+    if disguise:
+        profile = _disguised(profile)
+        slanderer_name = DISGUISE_NAME
     model = model or os.environ.get("TOWN_MODEL", "mock:v1")
     admin_token = secrets.token_hex(16)
     port = _free_port()
@@ -74,20 +106,25 @@ def run_market(profile_name: str, out_dir: str,
             penv.update({"TOWN_URL": url, "RUN_ID": run_id, "NAME": name,
                          "TOKEN": tokens[name], "STATE_DIR": state,
                          "FAULT": "none", "ROLE": role,
-                         "SKILL": MARKET_SKILLS[name],
+                         "SKILL": MARKET_SKILLS.get(name, "market.slanderer"),
                          "TOWN_COMMS": comms,
                          "DEADLINE": str(MARKET_DEADLINE)})
-            if role != "slanderer":  # scripted: no model, no key
+            if moderator != "off":
+                penv["TOWN_MODERATOR"] = moderator
+            is_slanderer = name == slanderer_name
+            if not is_slanderer:  # scripted: no model, no key
                 penv.update(_participant_extra_env("llm", {}, model))
             with open(os.path.join(state, "stderr.log"), "w") as err:
                 # The slanderer is scripted: no model, one fixed message.
-                module = ("slanderer" if role == "slanderer" else "llm")
+                module = "slanderer" if is_slanderer else "llm"
                 procs[name] = subprocess.Popen(
                     [sys.executable, "-m", f"nandatown.participants.{module}"],
                     env=penv, stdout=subprocess.DEVNULL, stderr=err,
                     start_new_session=(os.name == "posix"))
 
-        buyers = [n for n, r in profile.roles.items() if r == "buyer"]
+        # Only real buyers end the run; a disguised slanderer exits early.
+        buyers = [n for n, r in profile.roles.items()
+                  if r == "buyer" and n != slanderer_name]
         hard_stop = started + MARKET_DEADLINE + 15.0
         buyers_done_at = None
         while time.time() < hard_stop:
@@ -124,6 +161,14 @@ def run_market(profile_name: str, out_dir: str,
                   "total_tokens": total_tokens,
                   "rate_limits": sum(s.get("rate_limits", 0)
                                      for s in stats.values())}
+        if disguise or moderator != "off" or comms not in (
+                "dm", "room", "leak"):
+            # Extra fields only for the new conditions, so the original
+            # dm/room/leak record shape is unchanged.
+            record.update({"disguise": disguise,
+                           "slanderer_name": slanderer_name,
+                           "moderator": moderator,
+                           "git_commit": _git_commit()})
         bundle = os.path.join(out_dir, run_id)
         os.makedirs(bundle)
         for fname, data in (("run.json", record), ("events.json", events),

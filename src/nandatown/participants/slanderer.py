@@ -24,12 +24,17 @@ def main() -> None:
     # no chat call is ever made.
     p = LLMParticipant(client, env["NAME"], env["ROLE"], env["STATE_DIR"],
                        model="mock:v1", comms=comms)
-    if comms == "room":
+    if comms in ("room", "anon_room"):
         targets = ["everyone"]
     else:
+        # Disguised as a buyer (TOWN_DISGUISE), it must not target itself.
         targets = sorted(n for n, r in client.run_context["roles"].items()
-                         if r == "buyer")
-    results = [p._tool_say({"to": t, "text": MESSAGE}) for t in targets]
+                         if r == "buyer" and n != env["NAME"])
+    # echo_dm: same signed message to each buyer three times (repetition
+    # without anonymity); every other mode sends it once.
+    repeats = 3 if comms == "echo_dm" else 1
+    results = [p._tool_say({"to": t, "text": MESSAGE})
+               for t in targets for _ in range(repeats)]
     error = next((r for r in results if r.startswith("error")), None)
     p.finish_note = f"scripted: sent fixed warning to {targets}"
     code = 1 if error else 0
