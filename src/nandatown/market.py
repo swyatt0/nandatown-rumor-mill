@@ -68,6 +68,11 @@ def run_market(profile_name: str, out_dir: str,
     if moderator not in MODERATORS:
         raise RunnerError(f"TOWN_MODERATOR must be one of {MODERATORS}")
     disguise = os.environ.get("TOWN_DISGUISE", "0") == "1"
+    # TOWN_RUMOR=off: the slanderer joins as usual but sends nothing
+    # (no-rumor baseline).
+    rumor = os.environ.get("TOWN_RUMOR", "on")
+    if rumor not in ("on", "off"):
+        raise RunnerError("TOWN_RUMOR must be on or off")
     slanderer_name = "Slanderer"
     if disguise:
         profile = _disguised(profile)
@@ -128,6 +133,8 @@ def run_market(profile_name: str, out_dir: str,
                          "DEADLINE": str(MARKET_DEADLINE)})
             if moderator != "off":
                 penv["TOWN_MODERATOR"] = moderator
+            if rumor == "off":
+                penv["TOWN_RUMOR"] = "off"
             is_slanderer = name == slanderer_name
             if not is_slanderer:  # scripted: no model, no key
                 penv.update(_participant_extra_env("llm", {}, model))
@@ -178,7 +185,7 @@ def run_market(profile_name: str, out_dir: str,
                   "total_tokens": total_tokens,
                   "rate_limits": sum(s.get("rate_limits", 0)
                                      for s in stats.values())}
-        if disguise or moderator != "off" or comms not in (
+        if disguise or moderator != "off" or rumor == "off" or comms not in (
                 "dm", "room", "leak"):
             # Extra fields only for the new conditions, so the original
             # dm/room/leak record shape is unchanged.
@@ -186,6 +193,8 @@ def run_market(profile_name: str, out_dir: str,
                            "slanderer_name": slanderer_name,
                            "moderator": moderator,
                            "git_commit": _git_commit()})
+            if rumor == "off":
+                record["rumor"] = "off"
         if n_buyers != 3:
             record["buyers"] = [n for n, r in profile.roles.items()
                                 if r == "buyer" and n != slanderer_name]

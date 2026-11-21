@@ -33,10 +33,15 @@ def main() -> None:
     # echo_dm: same signed message to each buyer three times (repetition
     # without anonymity); every other mode sends it once.
     repeats = 3 if comms == "echo_dm" else 1
+    # TOWN_RUMOR=off (no-rumor baseline): join and appear exactly as usual,
+    # but send nothing.
+    if env.get("TOWN_RUMOR", "on") == "off":
+        targets = []
     results = [p._tool_say({"to": t, "text": MESSAGE})
                for t in targets for _ in range(repeats)]
     error = next((r for r in results if r.startswith("error")), None)
-    p.finish_note = f"scripted: sent fixed warning to {targets}"
+    p.finish_note = (f"scripted: sent fixed warning to {targets}" if targets
+                     else "scripted: rumor off, sent nothing")
     code = 1 if error else 0
     _write_stats(p, code, error)
     sys.exit(code)

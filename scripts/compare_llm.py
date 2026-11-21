@@ -218,7 +218,8 @@ def summarize(bundle: str) -> dict:
     # Condition label: comms plus the new-condition flags; plain dm/room/
     # leak runs keep their old label, so old output is unchanged.
     label = (run["comms"] + ("+disguised" if run.get("disguise") else "")
-             + ("+mod" if run.get("moderator") == "rule" else ""))
+             + ("+mod" if run.get("moderator") == "rule" else "")
+             + ("+norumor" if run.get("rumor") == "off" else ""))
     labeled: dict[str, int] = {}
     for r in rows:
         if "[Disputed:" in r["text"]:
