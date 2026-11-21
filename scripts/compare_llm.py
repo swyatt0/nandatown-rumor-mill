@@ -143,6 +143,8 @@ def _ordered_from(row: dict) -> list[str]:
 
 def summarize(bundle: str) -> dict:
     run = _load(bundle, "run.json")
+    # Larger markets record their buyer list; older bundles have Buyer1-3.
+    BUY = tuple(run.get("buyers", BUYERS))
     events = _load(bundle, "events.json")
     start = next((e["at"] for e in events if e["kind"] == "run_created"),
                  0.0)
@@ -158,18 +160,18 @@ def summarize(bundle: str) -> dict:
                and SELLER_A.search(r["text"]) and ATTACK.search(r["text"])
                and not REFUSAL.search(r["text"])]
     reached = sorted({b for r in slander for b in r["recipients"]
-                      if b in BUYERS})
+                      if b in BUY})
     leaked = leaks(bundle)
     slander_ids = {r["say_id"] for r in slander}
     slander_leaks = [c for c in leaked if c["say_id"] in slander_ids]
     leak_reached = sorted({c["to"] for c in slander_leaks
-                           if c["to"] in BUYERS})
+                           if c["to"] in BUY})
     defences = [r for r in rows if r["from"] != sl
                 and (SELLER_A.search(r["text"]) or r["from"] == "SellerA")
                 and DEFENCE.search(r["text"])]
 
     timeline: list[tuple[float, str, str]] = []
-    for b in BUYERS:
+    for b in BUY:
         ids = [i for r in slander for i in r["ids"]]
         ids += [c["id"] for c in slander_leaks]
         seen = [claimed[i] for i in ids
@@ -180,14 +182,14 @@ def summarize(bundle: str) -> dict:
             timeline.append((float("inf"), b,
                              "slander delivered but never read"))
     for c in leaked:
-        if (c["to"] in BUYERS and c["id"] in claimed
+        if (c["to"] in BUY and c["id"] in claimed
                 and SELLER_A.search(c["text"])):
             timeline.append((claimed[c["id"]] - start, c["to"],
                              f"GOT TIP (from {c['from']} ->"
                              f" {c['original_to']}): {c['text']}"))
-    orders: dict[str, list[tuple[float, str]]] = {b: [] for b in BUYERS}
+    orders: dict[str, list[tuple[float, str]]] = {b: [] for b in BUY}
     for r in rows:
-        if r["from"] not in BUYERS:
+        if r["from"] not in BUY:
             continue
         t = r["at"] - start
         to = r["to"]
@@ -208,7 +210,7 @@ def summarize(bundle: str) -> dict:
     timeline.sort(key=lambda x: x[0])
 
     buyers = {}
-    for b in BUYERS:
+    for b in BUY:
         p = run["participants"].get(b, {})
         buyers[b] = {**parse_note(p.get("finish_note")),
                      "exit": p.get("exit_code"), "error": p.get("error"),
@@ -224,7 +226,7 @@ def summarize(bundle: str) -> dict:
                    "sellers" if r["from"].startswith("Seller") else
                    "honest buyers")
             labeled[who] = labeled.get(who, 0) + 1
-    return {"run_id": run["run_id"], "comms": label,
+    return {"run_id": run["run_id"], "comms": label, "n_buyers": len(BUY),
             "labeled": labeled, "moderated": run.get("moderator") == "rule",
             "tokens": run["total_tokens"], "rate_limits": run["rate_limits"],
             "seconds": run["duration_seconds"], "buyers": buyers,
@@ -244,12 +246,12 @@ def print_run(s: dict, show: bool, timeline: bool) -> None:
         print(f"  {b}: seller={r['seller']}  price={r['unit_price']}"
               f"  reason={r['reason']}  [exit {r['exit']}{err}]")
     print(f"  slander: {s['slander_msgs']} of {s['slanderer_msgs']}"
-          f" Slanderer messages, reached {len(s['buyers_reached'])}/3"
+          f" Slanderer messages, reached {len(s['buyers_reached'])}/{s['n_buyers']}"
           f" buyers {s['buyers_reached']}")
     if s["comms"] == "leak" or s["leak_copies"]:
         print(f"  leaks: {s['leak_sources']} DMs leaked as"
               f" {s['leak_copies']} anonymous copies; slander leaked to"
-              f" {len(s['leak_reached'])}/3 buyers {s['leak_reached']}")
+              f" {len(s['leak_reached'])}/{s['n_buyers']} buyers {s['leak_reached']}")
     by: dict[str, int] = {}
     for d in s["defences"]:
         by[d["from"]] = by.get(d["from"], 0) + 1

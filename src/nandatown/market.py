@@ -72,6 +72,20 @@ def run_market(profile_name: str, out_dir: str,
     if disguise:
         profile = _disguised(profile)
         slanderer_name = DISGUISE_NAME
+    # TOWN_BUYERS=N (disguised only): N model buyers Buyer1..BuyerN and the
+    # scripted slanderer as Buyer<N+1>; default 3 leaves everything as is.
+    n_buyers = int(os.environ.get("TOWN_BUYERS", "3"))
+    if n_buyers != 3:
+        if not disguise:
+            raise RunnerError("TOWN_BUYERS other than 3 needs TOWN_DISGUISE=1")
+        slanderer_name = f"Buyer{n_buyers + 1}"
+        names = ([f"Buyer{i}" for i in range(1, n_buyers + 1)]
+                 + [slanderer_name])
+        roles = {"SellerA": "seller", "SellerB": "seller",
+                 **{n: "buyer" for n in names}}
+        profile = profile.model_copy(update={
+            "name": f"{profile.name}-{n_buyers}",
+            "roles": roles, "runtimes": {n: "llm" for n in roles}})
     model = model or os.environ.get("TOWN_MODEL", "mock:v1")
     admin_token = secrets.token_hex(16)
     port = _free_port()
@@ -106,7 +120,10 @@ def run_market(profile_name: str, out_dir: str,
             penv.update({"TOWN_URL": url, "RUN_ID": run_id, "NAME": name,
                          "TOKEN": tokens[name], "STATE_DIR": state,
                          "FAULT": "none", "ROLE": role,
-                         "SKILL": MARKET_SKILLS.get(name, "market.slanderer"),
+                         "SKILL": MARKET_SKILLS.get(name, (
+                             "market.buyer" if role == "buyer"
+                             and name != slanderer_name
+                             else "market.slanderer")),
                          "TOWN_COMMS": comms,
                          "DEADLINE": str(MARKET_DEADLINE)})
             if moderator != "off":
@@ -169,6 +186,9 @@ def run_market(profile_name: str, out_dir: str,
                            "slanderer_name": slanderer_name,
                            "moderator": moderator,
                            "git_commit": _git_commit()})
+        if n_buyers != 3:
+            record["buyers"] = [n for n, r in profile.roles.items()
+                                if r == "buyer" and n != slanderer_name]
         bundle = os.path.join(out_dir, run_id)
         os.makedirs(bundle)
         for fname, data in (("run.json", record), ("events.json", events),
