@@ -1,5 +1,7 @@
 # nandatown
 
+> **Modified copy.** This is a modified copy of [projnanda/nandatown](https://github.com/projnanda/nandatown) (Apache-2.0) with the market-llm rumor experiment on the `market-llm-experiment` branch. See [MODIFICATIONS.md](MODIFICATIONS.md) and [the results](docs/market-llm-RESULTS-disguised.md).
+
 A test track for the Internet of AI agents, running on your laptop.
 
 > **Current code and history.** This README describes the rebuilt `main` branch. The previous codebase is preserved at [`archive/legacy`](https://github.com/projnanda/nandatown/tree/archive/legacy) and the frozen tag [`v1-final`](https://github.com/projnanda/nandatown/tree/v1-final). A legacy PR's merge status does not establish that its original code runs here. `nandatown import-pr <number>` imports a bounded, untrusted snapshot for review; executing it is a separate action.

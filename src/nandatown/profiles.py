@@ -1,3 +1,4 @@
+# Modified from projnanda/nandatown (Apache-2.0) for the market-llm experiment; see MODIFICATIONS.md.
 """Built-in test profiles: the boring quote task under five conditions.
 
 The task is not the demo. Custody, recovery, stale-attempt rejection,

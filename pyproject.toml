@@ -1,3 +1,4 @@
+# Modified from projnanda/nandatown (Apache-2.0) for the market-llm experiment; see MODIFICATIONS.md.
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"

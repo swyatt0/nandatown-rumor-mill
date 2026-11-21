@@ -1,3 +1,4 @@
+# Modified from projnanda/nandatown (Apache-2.0) for the market-llm experiment; see MODIFICATIONS.md.
 """The nandatown command: bring, connect, attempt, disrupt, inspect, improve.
 
 One command interface for the whole town: deterministic Lab scenarios,

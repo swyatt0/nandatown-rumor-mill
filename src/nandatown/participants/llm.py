@@ -1,3 +1,4 @@
+# Modified from projnanda/nandatown (Apache-2.0) for the market-llm experiment; see MODIFICATIONS.md.
 """Tier two: a model-driven participant on the Track.
 
 The split is deliberate. The HARNESS is infrastructure and always
